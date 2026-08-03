@@ -142,6 +142,29 @@ class AccountMove(models.Model):
                 "please download it from SInvoice."
             )
 
+    # -------------------------------------------------------------------------
+    # SInvoice credentials access (Accounting users)
+    # -------------------------------------------------------------------------
+
+    def _l10n_vn_edi_get_credentials_company(self):
+        """Resolve credential company with sudo to avoid field ACL AccessError.
+
+        SInvoice credentials on res.company stay restricted to Settings
+        (base.group_system). Invoice users only need them in the send flow.
+        """
+        self.ensure_one()
+        return super(AccountMove, self.sudo())._l10n_vn_edi_get_credentials_company()
+
+    def _l10n_vn_edi_get_access_token(self):
+        """Read/write token & login credentials under sudo for invoice users."""
+        self.ensure_one()
+        return super(AccountMove, self.sudo())._l10n_vn_edi_get_access_token()
+
+    def _l10n_vn_edi_check_invoice_configuration(self):
+        """Validate SInvoice setup under sudo so credential field ACL does not block send."""
+        self.ensure_one()
+        return super(AccountMove, self.sudo())._l10n_vn_edi_check_invoice_configuration()
+
     def button_request_cancel(self):
         """TT78: do not cancel issued e-invoices; create a decreasing adjustment (credit note) instead."""
         vn_sent = self.filtered(lambda m: m.country_code == "VN" and m._l10n_vn_edi_is_sent() and m.l10n_vn_edi_invoice_state != "canceled")
