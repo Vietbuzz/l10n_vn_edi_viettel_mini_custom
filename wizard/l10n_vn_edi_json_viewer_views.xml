@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_l10n_vn_edi_viettel_json_viewer_form" model="ir.ui.view">
+        <field name="name">l10n_vn_edi_viettel.json.viewer.form</field>
+        <field name="model">l10n_vn_edi_viettel.json.viewer</field>
+        <field name="arch" type="xml">
+            <form string="SInvoice JSON Preview">
+                <sheet>
+                    <group>
+                        <field name="invoice_id"/>
+                        <field name="unit_price_digits"/>
+                    </group>
+                    <separator string="Payload that would be sent to SInvoice"/>
+                    <field name="json_content" nolabel="1" widget="text" readonly="1"/>
+                </sheet>
+                <footer>
+                    <button string="Close" class="btn-primary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

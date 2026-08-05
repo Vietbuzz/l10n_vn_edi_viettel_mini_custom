@@ -1,7 +1,7 @@
 {
     "name": "VN SInvoice - Mini Custom",
     "summary": "Customize buyer name/legal name sent to Viettel SInvoice",
-    "version": "18.0.1.0.2",
+    "version": "18.0.1.0.3",
     "category": "Accounting/Localizations",
     "license": "LGPL-3",
     "description": """
@@ -9,8 +9,9 @@ VN SInvoice - Mini Custom
 =========================
 
 Customize buyer name / legal name sent to Viettel SInvoice, harden
-SInvoice XML/PDF download after send, and let Invoicing users send
-e-invoices via sudo credential access (password stays Settings-only).
+SInvoice XML/PDF download after send, let Invoicing users send
+e-invoices via sudo credential access (password stays Settings-only),
+round unitPrice to Product Price digits, and preview the JSON payload.
 
 See README.md in the module folder for full documentation.
 """,
@@ -19,9 +20,11 @@ See README.md in the module folder for full documentation.
         "variant_description_invoice",
     ],
     "data": [
+        "security/ir.model.access.csv",
         "views/res_partner_views.xml",
+        "views/account_move_views.xml",
+        "wizard/l10n_vn_edi_json_viewer_views.xml",
     ],
     "installable": True,
     "application": False,
 }
-
