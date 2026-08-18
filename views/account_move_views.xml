@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_invoice_form_inherit_l10n_vn_edi_mini_custom" model="ir.ui.view">
+        <field name="name">account.move.form.inherit.l10n_vn_edi.mini_custom</field>
+        <field name="model">account.move</field>
+        <field name="inherit_id" ref="l10n_vn_edi_viettel.view_invoice_form_inherit_l10n_vn_edi"/>
+        <field name="arch" type="xml">
+            <xpath expr="//page[@id='l10n_vn_edi']/group" position="before">
+                <div class="oe_button_box" name="l10n_vn_edi_button_box">
+                    <button name="action_l10n_vn_edi_view_payload_json"
+                            type="object"
+                            class="btn-secondary"
+                            string="View JSON"
+                            icon="fa-code"
+                            groups="account.group_account_invoice"
+                            help="Preview the JSON payload that would be sent to SInvoice"/>
+                </div>
+            </xpath>
+        </field>
+    </record>
+</odoo>

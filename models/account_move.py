@@ -2,13 +2,18 @@
 
 import base64
 import io
+import json
 import logging
 import zipfile
 
 from odoo import _, fields, models
 from odoo.exceptions import UserError
+from odoo.tools.float_utils import float_repr, float_round
 
 _logger = logging.getLogger(__name__)
+
+# SInvoice rejects unitPrice with more than 6 decimal digits.
+_SINVOICE_UNIT_PRICE_MAX_DIGITS = 6
 
 
 class AccountMove(models.Model):
@@ -220,10 +225,22 @@ class AccountMove(models.Model):
         if self.country_code == "VN" and self.move_type == "out_refund":
             json_values.setdefault("generalInvoiceInfo", {})["adjustedNote"] = "Điều chỉnh giảm tiền"
 
+    def _l10n_vn_edi_get_unit_price_digits(self):
+        """Digits for unitPrice: Product Price accuracy, capped at SInvoice max (6)."""
+        digits = self.env["decimal.precision"].precision_get("Product Price")
+        return min(max(int(digits or 0), 0), _SINVOICE_UNIT_PRICE_MAX_DIGITS)
+
+    def _l10n_vn_edi_round_unit_price(self, amount):
+        """Round unit price for SInvoice JSON (avoid float artifacts / excess decimals)."""
+        digits = self._l10n_vn_edi_get_unit_price_digits()
+        rounded = float_round(float(amount or 0.0), precision_digits=digits)
+        return float(float_repr(rounded, digits))
+
     def _l10n_vn_edi_add_item_information(self, json_values):
         """TT78: decreasing adjustments (out_refund) keep quantity & unitPrice positive;
         isIncreaseItem=False (already set by base module) tells Viettel this is a decrease.
-        Also uses variant_description_sale as itemName when available."""
+        Also uses variant_description_sale as itemName when available.
+        Round unitPrice to Product Price digits (max 6 for SInvoice)."""
         super()._l10n_vn_edi_add_item_information(json_values)
         self.ensure_one()
 
@@ -234,13 +251,43 @@ class AccountMove(models.Model):
             if variant_desc:
                 item["itemName"] = variant_desc
 
-        if self.country_code != "VN" or self.move_type != "out_refund":
-            return
+        if self.country_code == "VN" and self.move_type == "out_refund":
+            for item in item_info:
+                for key in ("unitPrice", "quantity", "itemTotalAmountWithoutTax", "taxAmount",
+                            "itemTotalAmountAfterDiscount", "itemTotalAmountWithTax", "adjustmentTaxAmount"):
+                    if key in item:
+                        item[key] = abs(item[key])
+                item["isIncreaseItem"] = False
 
-        for item in item_info:
-            for key in ("unitPrice", "quantity", "itemTotalAmountWithoutTax", "taxAmount",
-                        "itemTotalAmountAfterDiscount", "itemTotalAmountWithTax", "adjustmentTaxAmount"):
-                if key in item:
-                    item[key] = abs(item[key])
-            item["isIncreaseItem"] = False
+        if self.country_code == "VN":
+            for item in item_info:
+                if "unitPrice" in item:
+                    item["unitPrice"] = self._l10n_vn_edi_round_unit_price(item["unitPrice"])
+
+    def action_l10n_vn_edi_view_payload_json(self):
+        """Open a wizard with the JSON payload that would be sent to SInvoice."""
+        self.ensure_one()
+        if self.country_code != "VN" or self.move_type not in ("out_invoice", "out_refund"):
+            raise UserError(_("SInvoice JSON preview is only available for Vietnamese customer invoices."))
+
+        # generate_invoice_json sets issue_date to now(); restore for debug preview
+        previous_issue_date = self.l10n_vn_edi_issue_date
+        try:
+            json_values = self._l10n_vn_edi_generate_invoice_json()
+        finally:
+            self.l10n_vn_edi_issue_date = previous_issue_date
+
+        viewer = self.env["l10n_vn_edi_viettel.json.viewer"].create({
+            "invoice_id": self.id,
+            "json_content": json.dumps(json_values, ensure_ascii=False, indent=2, default=str),
+            "unit_price_digits": self._l10n_vn_edi_get_unit_price_digits(),
+        })
+        return {
+            "type": "ir.actions.act_window",
+            "name": _("SInvoice JSON Preview"),
+            "res_model": "l10n_vn_edi_viettel.json.viewer",
+            "view_mode": "form",
+            "res_id": viewer.id,
+            "target": "new",
+        }
 
