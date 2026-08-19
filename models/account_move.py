@@ -19,6 +19,16 @@ _SINVOICE_UNIT_PRICE_MAX_DIGITS = 6
 class AccountMove(models.Model):
     _inherit = "account.move"
 
+    sinvoice_payment_method = fields.Selection(
+        selection=[
+            ("TM/CK", "Tiền mặt / Chuyển khoản"),
+            ("KTT", "Không thu tiền"),
+        ],
+        string="SInvoice Payment Method",
+        default="TM/CK",
+        copy=True,
+    )
+
     def _l10n_vn_edi_fetch_invoice_xml_file_data(self):
         """Fetch XML from SInvoice without crashing the Send wizard.
 
@@ -219,6 +229,16 @@ class AccountMove(models.Model):
         if commercial_custom:
             buyer_info["buyerLegalName"] = commercial_custom
 
+    def _l10n_vn_edi_add_payment_information(self, json_values):
+        """Send paymentMethodName as free text (Viettel accepts plain text)."""
+        self.ensure_one()
+        if self.country_code == "VN":
+            json_values["payments"] = [{
+                "paymentMethodName": self.sinvoice_payment_method or "TM/CK",
+            }]
+            return
+        return super()._l10n_vn_edi_add_payment_information(json_values)
+
     def _l10n_vn_edi_add_general_invoice_information(self, json_values):
         super()._l10n_vn_edi_add_general_invoice_information(json_values)
         self.ensure_one()
@@ -240,7 +260,9 @@ class AccountMove(models.Model):
         """TT78: decreasing adjustments (out_refund) keep quantity & unitPrice positive;
         isIncreaseItem=False (already set by base module) tells Viettel this is a decrease.
         Also uses variant_description_sale as itemName when available.
-        Round unitPrice to Product Price digits (max 6 for SInvoice)."""
+        Round unitPrice to Product Price digits (max 6 for SInvoice).
+        Include invoice line notes (Add a note) as itemInfo selection=2.
+        """
         super()._l10n_vn_edi_add_item_information(json_values)
         self.ensure_one()
 
@@ -264,19 +286,42 @@ class AccountMove(models.Model):
                 if "unitPrice" in item:
                     item["unitPrice"] = self._l10n_vn_edi_round_unit_price(item["unitPrice"])
 
+            # Base module only sends display_type=product, but Viettel selection=2 is for notes
+            # (no STT, no amount). Rebuild itemInfo in invoice line order to interleave notes.
+            product_item_by_line = {
+                line.id: item for line, item in zip(product_lines, item_info)
+            }
+            ordered_items = []
+            for line in self.invoice_line_ids.sorted(key=lambda ln: (ln.sequence, ln.id)):
+                if line.display_type == "product":
+                    item = product_item_by_line.get(line.id)
+                    if item:
+                        ordered_items.append(item)
+                elif line.display_type == "line_note":
+                    note_name = (line.name or "").strip()
+                    if note_name:
+                        ordered_items.append({
+                            "selection": 2,
+                            "itemName": note_name,
+                        })
+            json_values["itemInfo"] = ordered_items
+
+    def _l10n_vn_edi_generate_preview_invoice_json(self):
+        """Build SInvoice JSON for debug/preview without permanently changing issue date."""
+        self.ensure_one()
+        previous_issue_date = self.l10n_vn_edi_issue_date
+        try:
+            return self._l10n_vn_edi_generate_invoice_json()
+        finally:
+            self.l10n_vn_edi_issue_date = previous_issue_date
+
     def action_l10n_vn_edi_view_payload_json(self):
         """Open a wizard with the JSON payload that would be sent to SInvoice."""
         self.ensure_one()
         if self.country_code != "VN" or self.move_type not in ("out_invoice", "out_refund"):
             raise UserError(_("SInvoice JSON preview is only available for Vietnamese customer invoices."))
 
-        # generate_invoice_json sets issue_date to now(); restore for debug preview
-        previous_issue_date = self.l10n_vn_edi_issue_date
-        try:
-            json_values = self._l10n_vn_edi_generate_invoice_json()
-        finally:
-            self.l10n_vn_edi_issue_date = previous_issue_date
-
+        json_values = self._l10n_vn_edi_generate_preview_invoice_json()
         viewer = self.env["l10n_vn_edi_viettel.json.viewer"].create({
             "invoice_id": self.id,
             "json_content": json.dumps(json_values, ensure_ascii=False, indent=2, default=str),
@@ -286,6 +331,69 @@ class AccountMove(models.Model):
             "type": "ir.actions.act_window",
             "name": _("SInvoice JSON Preview"),
             "res_model": "l10n_vn_edi_viettel.json.viewer",
+            "view_mode": "form",
+            "res_id": viewer.id,
+            "target": "new",
+        }
+
+    def action_l10n_vn_edi_preview_draft_pdf(self):
+        """Call Viettel createInvoiceDraftPreview and show the returned PDF.
+
+        Payload is the same as createInvoice, but SInvoice does not store or issue
+        the invoice (API 7.20 in partner webservice docs).
+        """
+        self.ensure_one()
+        if self.country_code != "VN" or self.move_type not in ("out_invoice", "out_refund"):
+            raise UserError(_("SInvoice PDF preview is only available for Vietnamese customer invoices."))
+
+        errors = self._l10n_vn_edi_check_invoice_configuration()
+        if errors:
+            raise UserError("\n".join(errors))
+
+        from odoo.addons.l10n_vn_edi_viettel.models.account_move import (
+            SINVOICE_API_URL,
+            _l10n_vn_edi_send_request,
+        )
+
+        json_values = self._l10n_vn_edi_generate_preview_invoice_json()
+        access_token, error = self._l10n_vn_edi_get_access_token()
+        if error:
+            raise UserError(error)
+
+        response, error_message = _l10n_vn_edi_send_request(
+            method="POST",
+            url=f"{SINVOICE_API_URL}InvoiceAPI/InvoiceUtilsWS/createInvoiceDraftPreview/{self.company_id.vat}",
+            json_data=json_values,
+            cookies={"access_token": access_token},
+        )
+        if error_message:
+            raise UserError(error_message)
+
+        error_code = response.get("errorCode")
+        if error_code:
+            raise UserError(
+                _("SInvoice draft preview failed: %(code)s — %(desc)s",
+                  code=error_code,
+                  desc=response.get("description") or "")
+            )
+
+        file_b64 = response.get("fileToBytes")
+        if not file_b64:
+            raise UserError(_("SInvoice draft preview returned no PDF content."))
+
+        filename = response.get("fileName") or f"{(self.name or 'sinvoice_preview').replace('/', '_')}.pdf"
+        if not filename.lower().endswith(".pdf"):
+            filename = f"{filename}.pdf"
+
+        viewer = self.env["l10n_vn_edi_viettel.pdf.preview"].create({
+            "invoice_id": self.id,
+            "pdf_filename": filename,
+            "pdf_file": file_b64,
+        })
+        return {
+            "type": "ir.actions.act_window",
+            "name": _("SInvoice Draft PDF Preview"),
+            "res_model": "l10n_vn_edi_viettel.pdf.preview",
             "view_mode": "form",
             "res_id": viewer.id,
             "target": "new",

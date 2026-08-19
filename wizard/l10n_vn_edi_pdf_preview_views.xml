@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_l10n_vn_edi_viettel_pdf_preview_form" model="ir.ui.view">
+        <field name="name">l10n_vn_edi_viettel.pdf.preview.form</field>
+        <field name="model">l10n_vn_edi_viettel.pdf.preview</field>
+        <field name="arch" type="xml">
+            <form string="SInvoice Draft PDF Preview">
+                <sheet>
+                    <div class="alert alert-info" role="alert">
+                        Preview from Viettel API <code>createInvoiceDraftPreview</code>.
+                        Data is <strong>not</strong> saved and the invoice is <strong>not</strong> issued on SInvoice.
+                    </div>
+                    <group>
+                        <field name="invoice_id"/>
+                        <field name="pdf_filename"/>
+                    </group>
+                    <field name="pdf_file" filename="pdf_filename" widget="pdf_viewer" nolabel="1"/>
+                </sheet>
+                <footer>
+                    <button string="Close" class="btn-primary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

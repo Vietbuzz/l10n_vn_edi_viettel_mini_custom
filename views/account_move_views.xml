@@ -6,15 +6,29 @@
         <field name="inherit_id" ref="l10n_vn_edi_viettel.view_invoice_form_inherit_l10n_vn_edi"/>
         <field name="arch" type="xml">
             <xpath expr="//page[@id='l10n_vn_edi']/group" position="before">
-                <div class="oe_button_box" name="l10n_vn_edi_button_box">
+                <div class="alert alert-light border-0 mb-3 py-2 px-3 d-flex flex-wrap align-items-center gap-3"
+                     role="status"
+                     groups="account.group_account_invoice">
+                    <span class="text-muted small me-1">Preview before send</span>
                     <button name="action_l10n_vn_edi_view_payload_json"
                             type="object"
-                            class="btn-secondary"
+                            class="btn btn-link btn-sm p-0"
                             string="View JSON"
                             icon="fa-code"
-                            groups="account.group_account_invoice"
-                            help="Preview the JSON payload that would be sent to SInvoice"/>
+                            title="Preview the JSON payload that would be sent to SInvoice"/>
+                    <span class="text-muted">·</span>
+                    <button name="action_l10n_vn_edi_preview_draft_pdf"
+                            type="object"
+                            class="btn btn-link btn-sm p-0"
+                            string="Preview PDF"
+                            icon="fa-file-pdf-o"
+                            title="Call SInvoice createInvoiceDraftPreview — PDF only, no save / no issue"/>
                 </div>
+            </xpath>
+            <xpath expr="//page[@id='l10n_vn_edi']//field[@name='l10n_vn_edi_invoice_symbol']" position="after">
+                <field name="sinvoice_payment_method"
+                       options="{'no_open': True, 'no_create': True}"
+                       invisible="move_type not in ('out_invoice', 'out_refund')"/>
             </xpath>
         </field>
     </record>
