@@ -257,24 +257,54 @@ class AccountMove(models.Model):
         return float(float_repr(rounded, digits))
 
     def _l10n_vn_edi_add_item_information(self, json_values):
-        """TT78: decreasing adjustments (out_refund) keep quantity & unitPrice positive;
-        isIncreaseItem=False (already set by base module) tells Viettel this is a decrease.
-        Also uses variant_description_sale as itemName when available.
-        Round unitPrice to Product Price digits (max 6 for SInvoice).
-        Include invoice line notes (Add a note) as itemInfo selection=2.
+        """Customize itemInfo built by the base module.
+
+        Each item is first paired with the invoice line it was built from, matching
+        whichever base version is running:
+        - Odoo >= 1b28fc90fb: base emits product, line_note (selection=2) and discount lines.
+        - Older base: base emits product lines only.
+        If neither matches the item count, raise instead of sending misaligned items.
+
+        On product items only (notes are skipped):
+        - use variant_description_sale as itemName when available;
+        - TT78: decreasing adjustments (out_refund) keep quantity & amounts positive,
+          isIncreaseItem=False tells Viettel this is a decrease;
+        - round unitPrice to Product Price digits (max 6 for SInvoice).
+
+        Finally rebuild itemInfo in invoice line order so each note (Add a note) appears
+        exactly once as selection=2 (no STT, no amount), whichever base version emitted it.
         """
         super()._l10n_vn_edi_add_item_information(json_values)
         self.ensure_one()
 
         item_info = json_values.get("itemInfo") or []
-        product_lines = self.invoice_line_ids.filtered(lambda ln: ln.display_type == "product")
-        for item, line in zip(item_info, product_lines):
+        base_lines = self.invoice_line_ids.filtered(
+            lambda ln: ln.display_type in ("product", "line_note", "discount")
+        )
+        if len(item_info) != len(base_lines):
+            base_lines = self.invoice_line_ids.filtered(lambda ln: ln.display_type == "product")
+        if len(item_info) != len(base_lines):
+            raise UserError(_(
+                "Cannot build SInvoice items for %(invoice)s: %(items)s items were generated "
+                "but %(lines)s matching invoice lines were found. Please contact your administrator.",
+                invoice=self.name,
+                items=len(item_info),
+                lines=len(base_lines),
+            ))
+        item_by_line_id = dict(zip(base_lines.ids, item_info))
+
+        product_pairs = [
+            (line, item_by_line_id[line.id])
+            for line in base_lines
+            if line.display_type != "line_note" and item_by_line_id[line.id].get("selection") != 2
+        ]
+        for line, item in product_pairs:
             variant_desc = (line.variant_description_sale or "").strip()
             if variant_desc:
                 item["itemName"] = variant_desc
 
         if self.country_code == "VN" and self.move_type == "out_refund":
-            for item in item_info:
+            for _line, item in product_pairs:
                 for key in ("unitPrice", "quantity", "itemTotalAmountWithoutTax", "taxAmount",
                             "itemTotalAmountAfterDiscount", "itemTotalAmountWithTax", "adjustmentTaxAmount"):
                     if key in item:
@@ -282,21 +312,22 @@ class AccountMove(models.Model):
                 item["isIncreaseItem"] = False
 
         if self.country_code == "VN":
-            for item in item_info:
+            for _line, item in product_pairs:
                 if "unitPrice" in item:
                     item["unitPrice"] = self._l10n_vn_edi_round_unit_price(item["unitPrice"])
 
-            # Base module only sends display_type=product, but Viettel selection=2 is for notes
-            # (no STT, no amount). Rebuild itemInfo in invoice line order to interleave notes.
-            product_item_by_line = {
-                line.id: item for line, item in zip(product_lines, item_info)
-            }
+            # Viettel selection=2 is for notes (no STT, no amount). Rebuild itemInfo in
+            # invoice line order; add notes ourselves only when base did not emit them.
             ordered_items = []
             for line in self.invoice_line_ids.sorted(key=lambda ln: (ln.sequence, ln.id)):
-                if line.display_type == "product":
-                    item = product_item_by_line.get(line.id)
-                    if item:
-                        ordered_items.append(item)
+                item = item_by_line_id.get(line.id)
+                if item is not None:
+                    if line.display_type == "line_note" or item.get("selection") == 2:
+                        note_name = (item.get("itemName") or "").strip()
+                        if not note_name:
+                            continue
+                        item["itemName"] = note_name
+                    ordered_items.append(item)
                 elif line.display_type == "line_note":
                     note_name = (line.name or "").strip()
                     if note_name:
